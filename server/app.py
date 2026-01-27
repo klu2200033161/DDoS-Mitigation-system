@@ -8,10 +8,8 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# --- Shared State (In-Memory Database for Blocked IPs) ---
 BLOCKED_IPS = {} 
 
-# --- Helper Functions (Mitigation/Auto-Block) ---
 def execute_firewall_block(ip_address, action="ADD"):
     """Placeholder for Actual Mitigation."""
     print(f"[{action} BLOCK ACTION] IP {ip_address} recorded in BLOCKED_IPS list.")
@@ -26,7 +24,6 @@ def check_and_auto_block(ip_list):
             execute_firewall_block(ip_data['ip'], "ADD")
             print(f"[AUTO-BLOCK TRIGGERED] IP {ip_data['ip']} added to block list.")
 
-# --- API Endpoints ---
 
 @app.route('/api/analyze_traffic', methods=['GET'])
 def get_traffic_analysis():
@@ -50,7 +47,6 @@ def get_traffic_analysis():
         "blocked_count": len(BLOCKED_IPS)
     })
 
-# --- Monitoring Control Endpoints ---
 
 @app.route('/api/monitoring/status', methods=['GET'])
 def get_monitoring_status():
@@ -74,7 +70,6 @@ def control_monitoring():
     else:
         return jsonify({"success": False, "message": "Invalid action. Use 'start' or 'stop'."}), 400
 
-# --- Search and Mitigation Endpoints ---
 
 @app.route('/api/ip_risk', methods=['POST'])
 def search_ip_risk():
@@ -144,10 +139,8 @@ def get_blocked_list():
     return jsonify(blocked_list)
 
 
-# --- Main Runner ---
 if __name__ == '__main__':
-    
-    # Start the Data Collector threads in the background
+
     sniffer_thread = threading.Thread(target=data_collector.start_sniffer)
     analysis_thread = threading.Thread(target=data_collector.start_analysis_loop)
     
@@ -159,9 +152,6 @@ if __name__ == '__main__':
     
     print("[*] Background sniffer/analyzer threads started.")
     
-    # Start the Flask Web Server
     app.run(host='0.0.0.0', debug=True, port=5000, use_reloader=False)
 
-    # Stop the collector gracefully on exit
     data_collector.stop_analysis()
-    
