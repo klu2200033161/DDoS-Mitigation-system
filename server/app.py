@@ -155,6 +155,91 @@
 #     app.run(host='0.0.0.0', debug=True, port=5000, use_reloader=False)
 
 #     data_collector.stop_analysis()
+# from flask import Flask, request, jsonify
+# from flask_cors import CORS
+# import threading
+# import time
+# import data_collector
+
+# app = Flask(__name__)
+# CORS(app)
+
+# BLOCKED_IPS={}
+
+
+# def auto_block(ips):
+#     for ip in ips:
+#         if ip["risk"]>=90 and ip["ip"] not in BLOCKED_IPS:
+#             BLOCKED_IPS[ip["ip"]]={"time":int(time.time()),"reason":f"Auto Block {ip['ddos_type']}"}
+
+
+# @app.route("/api/analyze_traffic")
+# def analyze():
+
+#     data=data_collector.LATEST_ANALYSIS
+#     ips=data.get("high_risk_ips",[])
+
+#     if data_collector.get_monitoring_state():
+#         auto_block(ips)
+
+#     for ip in ips:
+#         if ip["ip"] in BLOCKED_IPS:
+#             ip["status"]="Blocked"
+
+#     status="Nominal"
+#     if any(i["risk"]>=90 for i in ips): status="HIGH ALERT"
+#     elif any(i["risk"]>=50 for i in ips): status="WARNING"
+
+#     return jsonify({
+#         "timestamp":data["timestamp"],
+#         "total_packets":data["total_packets"],
+#         "inbound_rate":data["inbound_rate"],
+#         "top_source_ips":ips,
+#         "system_status":status,
+#         "monitoring_status":"Active" if data_collector.get_monitoring_state() else "Stopped",
+#         "blocked_count":len(BLOCKED_IPS)
+#     })
+
+
+# @app.route("/api/monitoring/control",methods=["POST"])
+# def control():
+#     action=request.json.get("action")
+#     data_collector.set_monitoring_state(action=="start")
+#     return jsonify({"success":True})
+
+
+# @app.route("/api/block_ip",methods=["POST"])
+# def block():
+#     ip=request.json.get("ip")
+#     BLOCKED_IPS[ip]={"time":int(time.time()),"reason":"Manual Block"}
+#     return jsonify({"success":True})
+
+
+# @app.route("/api/unblock_ip",methods=["POST"])
+# def unblock():
+#     ip=request.json.get("ip")
+#     BLOCKED_IPS.pop(ip,None)
+#     return jsonify({"success":True})
+
+
+# @app.route("/api/blocked_list")
+# def blocked():
+#     return jsonify([{"ip":ip,**v} for ip,v in BLOCKED_IPS.items()])
+
+
+# @app.route("/api/ip_risk",methods=["POST"])
+# def search():
+#     ip=request.json.get("ip")
+#     risk=95 if int(ip.split(".")[-1])%2==0 else 20
+#     status="Blocked" if ip in BLOCKED_IPS else ("DDoS Attack" if risk>=90 else "Normal")
+#     return jsonify({"ip":ip,"risk":risk,"status":status,"ddos_type":"Manual Inspection"})
+
+
+# if __name__=="__main__":
+#     threading.Thread(target=data_collector.start_sniffer,daemon=True).start()
+#     threading.Thread(target=data_collector.start_analysis_loop,daemon=True).start()
+#     threading.Thread(target=data_collector.realtime_rate_calculator,daemon=True).start()
+#     app.run(debug=True,port=5000,use_reloader=False)
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import threading
@@ -164,79 +249,152 @@ import data_collector
 app = Flask(__name__)
 CORS(app)
 
-BLOCKED_IPS={}
+BLOCKED_IPS = {}
+BLOCK_DURATION = 300
 
 
 def auto_block(ips):
+
+    current_time = int(time.time())
+
     for ip in ips:
-        if ip["risk"]>=90 and ip["ip"] not in BLOCKED_IPS:
-            BLOCKED_IPS[ip["ip"]]={"time":int(time.time()),"reason":f"Auto Block {ip['ddos_type']}"}
+
+        if ip["risk"] >= 90 and ip["ip"] not in BLOCKED_IPS:
+
+            BLOCKED_IPS[ip["ip"]] = {
+                "time": current_time,
+                "reason": f"Auto Block {ip['ddos_type']}"
+            }
+
+
+def remove_expired_blocks():
+
+    current_time = int(time.time())
+
+    expired = []
+
+    for ip, data in BLOCKED_IPS.items():
+
+        if current_time - data["time"] > BLOCK_DURATION:
+            expired.append(ip)
+
+    for ip in expired:
+        del BLOCKED_IPS[ip]
 
 
 @app.route("/api/analyze_traffic")
 def analyze():
 
-    data=data_collector.LATEST_ANALYSIS
-    ips=data.get("high_risk_ips",[])
+    remove_expired_blocks()
+
+    data = data_collector.LATEST_ANALYSIS
+    ips = data.get("high_risk_ips", [])
 
     if data_collector.get_monitoring_state():
         auto_block(ips)
 
     for ip in ips:
-        if ip["ip"] in BLOCKED_IPS:
-            ip["status"]="Blocked"
 
-    status="Nominal"
-    if any(i["risk"]>=90 for i in ips): status="HIGH ALERT"
-    elif any(i["risk"]>=50 for i in ips): status="WARNING"
+        if ip["ip"] in BLOCKED_IPS:
+            ip["status"] = "Blocked"
+        else:
+            ip["status"] = "Active"
+
+    status = "Nominal"
+
+    if any(i["risk"] >= 90 for i in ips):
+        status = "HIGH ALERT"
+
+    elif any(i["risk"] >= 50 for i in ips):
+        status = "WARNING"
 
     return jsonify({
-        "timestamp":data["timestamp"],
-        "total_packets":data["total_packets"],
-        "inbound_rate":data["inbound_rate"],
-        "top_source_ips":ips,
-        "system_status":status,
-        "monitoring_status":"Active" if data_collector.get_monitoring_state() else "Stopped",
-        "blocked_count":len(BLOCKED_IPS)
+        "timestamp": data["timestamp"],
+        "total_packets": data["total_packets"],
+        "inbound_rate": data["inbound_rate"],
+        "top_source_ips": ips,
+        "system_status": status,
+        "monitoring_status": "Active" if data_collector.get_monitoring_state() else "Stopped",
+        "blocked_count": len(BLOCKED_IPS)
     })
 
 
-@app.route("/api/monitoring/control",methods=["POST"])
+@app.route("/api/monitoring/control", methods=["POST"])
 def control():
-    action=request.json.get("action")
-    data_collector.set_monitoring_state(action=="start")
-    return jsonify({"success":True})
+
+    action = request.json.get("action")
+
+    data_collector.set_monitoring_state(action == "start")
+
+    return jsonify({"success": True})
 
 
-@app.route("/api/block_ip",methods=["POST"])
+@app.route("/api/block_ip", methods=["POST"])
 def block():
-    ip=request.json.get("ip")
-    BLOCKED_IPS[ip]={"time":int(time.time()),"reason":"Manual Block"}
-    return jsonify({"success":True})
+
+    ip = request.json.get("ip")
+
+    BLOCKED_IPS[ip] = {
+        "time": int(time.time()),
+        "reason": "Manual Block"
+    }
+
+    return jsonify({"success": True})
 
 
-@app.route("/api/unblock_ip",methods=["POST"])
+@app.route("/api/unblock_ip", methods=["POST"])
 def unblock():
-    ip=request.json.get("ip")
-    BLOCKED_IPS.pop(ip,None)
-    return jsonify({"success":True})
+
+    ip = request.json.get("ip")
+
+    BLOCKED_IPS.pop(ip, None)
+
+    return jsonify({"success": True})
 
 
 @app.route("/api/blocked_list")
 def blocked():
-    return jsonify([{"ip":ip,**v} for ip,v in BLOCKED_IPS.items()])
+
+    return jsonify([
+        {"ip": ip, **v}
+        for ip, v in BLOCKED_IPS.items()
+    ])
 
 
-@app.route("/api/ip_risk",methods=["POST"])
+@app.route("/api/ip_risk", methods=["POST"])
 def search():
-    ip=request.json.get("ip")
-    risk=95 if int(ip.split(".")[-1])%2==0 else 20
-    status="Blocked" if ip in BLOCKED_IPS else ("DDoS Attack" if risk>=90 else "Normal")
-    return jsonify({"ip":ip,"risk":risk,"status":status,"ddos_type":"Manual Inspection"})
+
+    ip = request.json.get("ip")
+
+    risk = 95 if int(ip.split(".")[-1]) % 2 == 0 else 20
+
+    status = "Blocked" if ip in BLOCKED_IPS else (
+        "DDoS Attack" if risk >= 90 else "Normal"
+    )
+
+    return jsonify({
+        "ip": ip,
+        "risk": risk,
+        "status": status,
+        "ddos_type": "Manual Inspection"
+    })
 
 
-if __name__=="__main__":
-    threading.Thread(target=data_collector.start_sniffer,daemon=True).start()
-    threading.Thread(target=data_collector.start_analysis_loop,daemon=True).start()
-    threading.Thread(target=data_collector.realtime_rate_calculator,daemon=True).start()
-    app.run(debug=True,port=5000,use_reloader=False)
+if __name__ == "__main__":
+
+    threading.Thread(
+        target=data_collector.start_sniffer,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=data_collector.start_analysis_loop,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=data_collector.realtime_rate_calculator,
+        daemon=True
+    ).start()
+
+    app.run(debug=True, port=5000, use_reloader=False)
